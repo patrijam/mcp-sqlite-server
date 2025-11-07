@@ -68,7 +68,6 @@ def quote_identifier(identifier: str) -> str:
     """
     # Replace any double quotes with double-double quotes
     return '"' + identifier.replace('"', '""') + '"'
-    return _db_connections[db_path]
 
 
 @mcp.resource("sqlite://{db_path}/schema")
