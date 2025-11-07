@@ -5,6 +5,7 @@ This script tests all tools and features without requiring the full MCP protocol
 
 import json
 import sqlite3
+import re
 
 DB_PATH = "sample_database.db"
 
@@ -14,6 +15,25 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def validate_table_name(conn: sqlite3.Connection, table_name: str) -> bool:
+    """Validate that a table name exists in the database."""
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
+        return False
+    
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT name FROM sqlite_master 
+        WHERE type='table' AND name=? AND name NOT LIKE 'sqlite_%'
+    """, (table_name,))
+    
+    return cursor.fetchone() is not None
+
+
+def quote_identifier(identifier: str) -> str:
+    """Quote an SQL identifier safely."""
+    return '"' + identifier.replace('"', '""') + '"'
 
 
 def list_tables(db_path: str):
@@ -32,6 +52,11 @@ def list_tables(db_path: str):
 def get_table_schema(db_path: str, table_name: str):
     """Get table schema."""
     conn = get_connection(db_path)
+    
+    # Validate table name exists
+    if not validate_table_name(conn, table_name):
+        return {"error": f"Table '{table_name}' not found or invalid"}
+    
     cursor = conn.cursor()
     
     cursor.execute("""
@@ -46,7 +71,9 @@ def get_table_schema(db_path: str, table_name: str):
     
     create_sql = result[0]
     
-    cursor.execute(f"PRAGMA table_info({table_name})")
+    # Use quoted identifier for PRAGMA
+    quoted_name = quote_identifier(table_name)
+    cursor.execute(f"PRAGMA table_info({quoted_name})")
     columns = [
         {
             "name": col[1],
@@ -107,13 +134,33 @@ def execute_query(db_path: str, query: str, params=None):
 def count_rows(db_path: str, table_name: str, where_clause=None):
     """Count rows in a table."""
     conn = get_connection(db_path)
+    
+    # Validate table name exists
+    if not validate_table_name(conn, table_name):
+        return {
+            "success": False,
+            "error": f"Table '{table_name}' not found or invalid"
+        }
+    
     cursor = conn.cursor()
     
     try:
+        # Use quoted identifier for table name
+        quoted_name = quote_identifier(table_name)
+        
         if where_clause:
-            query = f"SELECT COUNT(*) FROM {table_name} WHERE {where_clause}"
+            # Validate WHERE clause
+            where_upper = where_clause.upper()
+            dangerous = ['DELETE', 'DROP', 'INSERT', 'UPDATE', 'ALTER', 'CREATE', '--', ';']
+            if any(keyword in where_upper for keyword in dangerous):
+                return {
+                    "success": False,
+                    "error": "WHERE clause contains invalid keywords"
+                }
+            
+            query = f"SELECT COUNT(*) FROM {quoted_name} WHERE {where_clause}"
         else:
-            query = f"SELECT COUNT(*) FROM {table_name}"
+            query = f"SELECT COUNT(*) FROM {quoted_name}"
         
         cursor.execute(query)
         count = cursor.fetchone()[0]
